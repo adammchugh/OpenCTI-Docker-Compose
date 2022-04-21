@@ -1,0 +1,655 @@
+version: '3'
+services:
+  watchtower:
+    image: containrrr/watchtower
+    restart: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /etc/timezone:/etc/timezone:ro
+    environment:
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_LABEL_ENABLE=true
+      - WATCHTOWER_INCLUDE_RESTARTING=true
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    deploy:
+      placement:
+        constraints: [node.labels.system_role == core ]
+
+  redis:
+    image: redis:6.2.6
+    restart: always
+    volumes:
+      - redisdata:/data
+    deploy:
+      placement:
+        constraints: [node.labels.system_role == core ]
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  elasticsearch_01:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.1
+    volumes:
+      - elasticsearch_01:/usr/share/elasticsearch/data
+    environment:
+      - node.name=elasticsearch_01
+      - cluster.name=opencti-cluster
+      - discovery.seed_hosts=elasticsearch_02,elasticsearch_03
+      - cluster.initial_master_nodes=elasticsearch_01,elasticsearch_02,elasticsearch_03
+      - "ES_JAVA_OPTS=-Xms2g -Xmx2g"
+    restart: always
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    deploy:
+      placement:
+        constraints: [node.labels.system_role == core ]
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  elasticsearch_02:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.1
+    volumes:
+      - elasticsearch_02:/usr/share/elasticsearch/data
+    environment:
+      - node.name=elasticsearch_02
+      - cluster.name=opencti-cluster
+      - discovery.seed_hosts=elasticsearch_01,elasticsearch_03
+      - cluster.initial_master_nodes=elasticsearch_01,elasticsearch_02,elasticsearch_03
+      - "ES_JAVA_OPTS=-Xms2g -Xmx2g"
+    restart: always
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    deploy:
+      placement:
+        constraints: [node.labels.system_role == indexer ]
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  elasticsearch_03:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.1
+    volumes:
+      - elasticsearch_03:/usr/share/elasticsearch/data
+    environment:
+      - node.name=elasticsearch_03
+      - cluster.name=opencti-cluster
+      - discovery.seed_hosts=elasticsearch_01,elasticsearch_02
+      - cluster.initial_master_nodes=elasticsearch_01,elasticsearch_02,elasticsearch_03
+      - "ES_JAVA_OPTS=-Xms2g -Xmx2g"
+    restart: always
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    deploy:
+      placement:
+        constraints: [node.labels.system_role == indexer ]
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  minio:
+    image: minio/minio:RELEASE.2022-02-26T02-54-46Z
+    volumes:
+      - s3data:/data
+    ports:
+      - "9000:9000"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    command: server /data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    restart: always
+    deploy:
+      placement:
+        constraints: [node.labels.system_role == core ]
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  rabbitmq:
+    image: rabbitmq:3.9-management
+    environment:
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_DEFAULT_USER}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_DEFAULT_PASS}
+    volumes:
+      - amqpdata:/var/lib/rabbitmq
+    restart: always
+    deploy:
+      placement:
+        constraints: [node.labels.system_role == core ]
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  opencti:
+    image: opencti/platform:5.2.4
+    environment:
+      - NODE_OPTIONS=--max-old-space-size=8096
+      - APP__PORT=8080
+      - APP__ADMIN__EMAIL=${OPENCTI_ADMIN_EMAIL}
+      - APP__ADMIN__PASSWORD=${OPENCTI_ADMIN_PASSWORD}
+      - APP__ADMIN__TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - APP__APP_LOGS__LOGS_LEVEL=error
+      - REDIS__HOSTNAME=redis
+      - REDIS__PORT=6379
+      - ELASTICSEARCH__URL=["http://elasticsearch_01:9200","http://elasticsearch_02:9200","http://elasticsearch_03:9200"]
+      - MINIO__ENDPOINT=minio
+      - MINIO__PORT=9000
+      - MINIO__USE_SSL=false
+      - MINIO__ACCESS_KEY=${MINIO_ROOT_USER}
+      - MINIO__SECRET_KEY=${MINIO_ROOT_PASSWORD}
+      - RABBITMQ__HOSTNAME=rabbitmq
+      - RABBITMQ__PORT=5672
+      - RABBITMQ__PORT_MANAGEMENT=15672
+      - RABBITMQ__MANAGEMENT_SSL=false
+      - RABBITMQ__USERNAME=${RABBITMQ_DEFAULT_USER}
+      - RABBITMQ__PASSWORD=${RABBITMQ_DEFAULT_PASS}
+      - SMTP__HOSTNAME=${SMTP_HOSTNAME}
+      - SMTP__PORT=25
+      - PROVIDERS__LOCAL__STRATEGY=LocalStrategy
+    ports:
+      - "8080:8080"
+    depends_on:
+      - redis
+      - elasticsearch_01
+      - elasticsearch_02
+      - elasticsearch_03
+      - minio
+      - rabbitmq
+    restart: always
+    deploy:
+      placement:
+        constraints: [node.labels.system_role == core ]
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  nodered:
+    image: nodered/node-red:latest
+    ports:
+      - "1880:1880"
+    volumes:
+      - nodereddata:/data
+    deploy:
+      placement:
+        constraints: [node.labels.system_role == core ]
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  worker:
+    image: opencti/worker:5.2.4
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - WORKER_LOG_LEVEL=info
+    depends_on:
+      - opencti
+    deploy:
+      mode: replicated
+      replicas: 4
+      placement:
+        constraints: [node.labels.system_role == processor ]
+    restart: always
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  connector-history:
+    image: opencti/connector-history:5.2.4
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - CONNECTOR_ID=${CONNECTOR_HISTORY_ID} # Valid UUIDv4
+      - CONNECTOR_TYPE=STREAM
+      - CONNECTOR_NAME=History
+      - CONNECTOR_SCOPE=history
+      - CONNECTOR_CONFIDENCE_LEVEL=15 # From 0 (Unknown) to 100 (Fully trusted)
+      - CONNECTOR_LOG_LEVEL=info
+    restart: always
+    depends_on:
+      - opencti
+    deploy:
+      placement:
+        constraints: [node.labels.system_role == processor ]
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  connector-export-file-stix:
+    image: opencti/connector-export-file-stix:5.2.4
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - CONNECTOR_ID=${CONNECTOR_EXPORT_FILE_STIX_ID} # Valid UUIDv4
+      - CONNECTOR_TYPE=INTERNAL_EXPORT_FILE
+      - CONNECTOR_NAME=ExportFileStix2
+      - CONNECTOR_SCOPE=application/json
+      - CONNECTOR_CONFIDENCE_LEVEL=15 # From 0 (Unknown) to 100 (Fully trusted)
+      - CONNECTOR_LOG_LEVEL=info
+    restart: always
+    depends_on:
+      - opencti
+    deploy:
+      placement:
+        constraints: [node.labels.system_role == processor ]
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  connector-export-file-csv:
+    image: opencti/connector-export-file-csv:5.2.4
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - CONNECTOR_ID=${CONNECTOR_EXPORT_FILE_CSV_ID} # Valid UUIDv4
+      - CONNECTOR_TYPE=INTERNAL_EXPORT_FILE
+      - CONNECTOR_NAME=ExportFileCsv
+      - CONNECTOR_SCOPE=text/csv
+      - CONNECTOR_CONFIDENCE_LEVEL=15 # From 0 (Unknown) to 100 (Fully trusted)
+      - CONNECTOR_LOG_LEVEL=info
+    restart: always
+    depends_on:
+      - opencti
+    deploy:
+      placement:
+        constraints: [node.labels.system_role == processor ]
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  connector-export-file-txt:
+    image: opencti/connector-export-file-txt:5.2.4
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - CONNECTOR_ID=${CONNECTOR_EXPORT_FILE_TXT_ID} # Valid UUIDv4
+      - CONNECTOR_TYPE=INTERNAL_EXPORT_FILE
+      - CONNECTOR_NAME=ExportFileTxt
+      - CONNECTOR_SCOPE=text/plain
+      - CONNECTOR_CONFIDENCE_LEVEL=15 # From 0 (Unknown) to 100 (Fully trusted)
+      - CONNECTOR_LOG_LEVEL=info
+    restart: always
+    depends_on:
+      - opencti
+    deploy:
+      placement:
+        constraints: [node.labels.system_role == processor ]
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  connector-import-file-stix:
+    image: opencti/connector-import-file-stix:5.2.4
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - CONNECTOR_ID=${CONNECTOR_IMPORT_FILE_STIX_ID} # Valid UUIDv4
+      - CONNECTOR_TYPE=INTERNAL_IMPORT_FILE
+      - CONNECTOR_NAME=ImportFileStix
+      - CONNECTOR_VALIDATE_BEFORE_IMPORT=true # Validate any bundle before import
+      - CONNECTOR_SCOPE=application/json,text/xml
+      - CONNECTOR_AUTO=true # Enable/disable auto-import of file
+      - CONNECTOR_CONFIDENCE_LEVEL=15 # From 0 (Unknown) to 100 (Fully trusted)
+      - CONNECTOR_LOG_LEVEL=info
+    restart: always
+    depends_on:
+      - opencti
+    deploy:
+      placement:
+        constraints: [node.labels.system_role == processor ]
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  connector-import-document:
+    image: opencti/connector-import-document:5.2.4
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - CONNECTOR_ID=${CONNECTOR_IMPORT_DOCUMENT_ID} # Valid UUIDv4
+      - CONNECTOR_TYPE=INTERNAL_IMPORT_FILE
+      - CONNECTOR_NAME=ImportDocument
+      - CONNECTOR_VALIDATE_BEFORE_IMPORT=true # Validate any bundle before import
+      - CONNECTOR_SCOPE=application/pdf,text/plain,text/html
+      - CONNECTOR_AUTO=true # Enable/disable auto-import of file
+      - CONNECTOR_ONLY_CONTEXTUAL=false # Only extract data related to an entity (a report, a threat actor, etc.)
+      - CONNECTOR_CONFIDENCE_LEVEL=15 # From 0 (Unknown) to 100 (Fully trusted)
+      - CONNECTOR_LOG_LEVEL=info
+      - IMPORT_DOCUMENT_CREATE_INDICATOR=true
+    restart: always
+    depends_on:
+      - opencti
+    deploy:
+      placement:
+        constraints: [node.labels.system_role == processor ]
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  connector-alienvault:
+    image: opencti/connector-alienvault:5.2.4
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - CONNECTOR_ID=${CONNECTOR_IMPORT_ALIENVAULT_ID}
+      - CONNECTOR_TYPE=EXTERNAL_IMPORT
+      - CONNECTOR_NAME=AlienVault
+      - CONNECTOR_SCOPE=alienvault
+      - CONNECTOR_CONFIDENCE_LEVEL=15 # From 0 (Unknown) to 100 (Fully trusted)
+      - CONNECTOR_UPDATE_EXISTING_DATA=false
+      - CONNECTOR_LOG_LEVEL=info
+      - ALIENVAULT_BASE_URL=https://otx.alienvault.com
+      - ALIENVAULT_API_KEY=${CONNECTOR_IMPORT_ALIENVAULT_APIKEY}
+      - ALIENVAULT_TLP=White
+      - ALIENVAULT_CREATE_OBSERVABLES=true
+      - ALIENVAULT_CREATE_INDICATORS=true
+      - ALIENVAULT_PULSE_START_TIMESTAMP=2017-01-01T00:00:00                  # BEWARE! Could be a lot of pulses!
+      - ALIENVAULT_REPORT_TYPE=threat-report
+      - ALIENVAULT_REPORT_STATUS=New
+      - ALIENVAULT_GUESS_MALWARE=true                                        # Use tags to guess malware.
+      - ALIENVAULT_GUESS_CVE=true                                            # Use tags to guess CVE.
+      - ALIENVAULT_EXCLUDED_PULSE_INDICATOR_TYPES=FileHash-MD5,FileHash-SHA1  # Excluded Pulse indicator types.
+      - ALIENVAULT_ENABLE_RELATIONSHIPS=true                                  # Enable/Disable relationship creation between SDOs.
+      - ALIENVAULT_ENABLE_ATTACK_PATTERNS_INDICATES=true                      # Enable/Disable "indicates" relationships between indicators and attack patterns
+      - ALIENVAULT_INTERVAL_SEC=3600
+    restart: always
+    deploy:
+      placement:
+        constraints: [node.labels.system_role == processor ]
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  connector-cve:
+    image: opencti/connector-cve:5.2.4
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - CONNECTOR_ID=${CONNECTOR_IMPORT_CVE_ID}
+      - CONNECTOR_TYPE=EXTERNAL_IMPORT
+      - CONNECTOR_NAME=Common Vulnerabilities and Exposures
+      - CONNECTOR_SCOPE=identity,vulnerability
+      - CONNECTOR_CONFIDENCE_LEVEL=75 # From 0 (Unknown) to 100 (Fully trusted)
+      - CONNECTOR_UPDATE_EXISTING_DATA=true
+      - CONNECTOR_RUN_AND_TERMINATE=false
+      - CONNECTOR_LOG_LEVEL=info
+      - CVE_IMPORT_HISTORY=true # Import history at the first run (after only recent), reset the connector state if you want to re-import
+      - CVE_NVD_DATA_FEED=https://nvd.nist.gov/feeds/json/cve/1.1/nvdcve-1.1-recent.json.gz
+      - CVE_HISTORY_DATA_FEED=https://nvd.nist.gov/feeds/json/cve/1.1/
+      - CVE_INTERVAL=1 # In days, must be strictly greater than 1
+    restart: always
+    deploy:
+      placement:
+        constraints: [node.labels.system_role == processor ]
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  connector-cyber-threat-coalition:
+    image: opencti/connector-cyber-threat-coalition:5.2.4
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - CONNECTOR_ID=${CONNECTOR_IMPORT_CTC_ID}
+      - CONNECTOR_TYPE=EXTERNAL_IMPORT
+      - CONNECTOR_NAME=CyberThreatCoalition
+      - CONNECTOR_SCOPE=indicator,report,identity
+      - CONNECTOR_CONFIDENCE_LEVEL=15 # From 0 (Unknown) to 100 (Fully trusted)
+      - CONNECTOR_UPDATE_EXISTING_DATA=false
+      - CONNECTOR_LOG_LEVEL=info
+      - CYBER_THREAT_COALITION_INTERVAL=604800 # Seconds (1 week)
+      - CYBER_THREAT_COALITION_BASE_URL=https://blacklist.cyberthreatcoalition.org/vetted
+      - CYBER_THREAT_COALITION_CREATE_INDICATORS=true
+      - CYBER_THREAT_COALITION_CREATE_OBSERVABLES=true
+    restart: always
+    deploy:
+      placement:
+        constraints: [node.labels.system_role == processor ]
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  connector-cybercrimetracker:
+    image: opencti/connector-cybercrime-tracker:5.2.4
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - CONNECTOR_ID=${CONNECTOR_IMPORT_CCT_ID}
+      - CONNECTOR_TYPE=EXTERNAL_IMPORT
+      - CONNECTOR_NAME=Cybercrime-Tracker
+      - CONNECTOR_SCOPE=cybercrime-tracker
+      - CONNECTOR_CONFIDENCE_LEVEL=15 # From 0 (Unknown) to 100 (Fully trusted)
+      - CONNECTOR_UPDATE_EXISTING_DATA=true
+      - CONNECTOR_LOG_LEVEL=info
+      - CYBERCRIME_TRACKER_FEED_URL=http://cybercrime-tracker.net/rss.xml
+      - CYBERCRIME_TRACKER_TLP=WHITE
+      - CYBERCRIME_TRACKER_INTERVAL=86400
+      - CYBERCRIME_TRACKER_CREATE_INDICATORS=true
+      - CYBERCRIME_TRACKER_CREATE_OBSERVABLES=true
+    restart: always
+    deploy:
+      placement:
+        constraints: [node.labels.system_role == processor ]
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  connector-malpedia:
+    image: opencti/connector-malpedia:5.2.4
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - CONNECTOR_ID=${CONNECTOR_IMPORT_MALPEDIA_ID}
+      - CONNECTOR_TYPE=EXTERNAL_IMPORT
+      - CONNECTOR_NAME=Malpedia
+      - CONNECTOR_SCOPE=malpedia
+      - CONNECTOR_CONFIDENCE_LEVEL=30 # From 0 (Unknown) to 100 (Fully trusted)
+      - CONNECTOR_UPDATE_EXISTING_DATA=false
+      - CONNECTOR_LOG_LEVEL=info
+      - MALPEDIA_AUTH_KEY=${CONNECTOR_IMPORT_MALPEDIA_AUTH_KEY} # Empty key only fetches TLP:WHITE information
+      - MALPEDIA_INTERVAL_SEC=86400 # Run once every day
+      - MALPEDIA_IMPORT_INTRUSION_SETS=false
+      - MALPEDIA_IMPORT_YARA=true
+      - MALPEDIA_CREATE_INDICATORS=true
+      - MALPEDIA_CREATE_OBSERVABLES=true
+    restart: always
+    deploy:
+      placement:
+        constraints: [node.labels.system_role == processor ]
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  connector-malware-bazaar-recent-additions:
+    image: opencti/connector-malwarebazaar-recent-additions:5.2.4
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - CONNECTOR_ID=${CONNECTOR_IMPORT_MALWAREBAZAAR_ID}
+      - CONNECTOR_TYPE=EXTERNAL_IMPORT
+      - "CONNECTOR_NAME=MalwareBazaar Recent Additions"
+      - CONNECTOR_CONFIDENCE_LEVEL=50 # From 0 (Unknown) to 100 (Fully trusted)
+      - CONNECTOR_UPDATE_EXISTING_DATA=true
+      - CONNECTOR_LOG_LEVEL=info
+      - MALWAREBAZAAR_RECENT_ADDITIONS_API_URL=https://mb-api.abuse.ch/api/v1/
+      - MALWAREBAZAAR_RECENT_ADDITIONS_COOLDOWN_SECONDS=300 # Time to wait in seconds between subsequent requests
+      - MALWAREBAZAAR_RECENT_ADDITIONS_INCLUDE_TAGS=exe,dll,docm,docx,doc,xls,xlsx,xlsm,js # (Optional) Only download files if any tag matches. (Comma separated)
+      - MALWAREBAZAAR_RECENT_ADDITIONS_INCLUDE_REPORTERS= # (Optional) Only download files uploaded by these reporters. (Comma separated)
+      - MALWAREBAZAAR_RECENT_ADDITIONS_LABELS=malware-bazar # (Optional) Labels to apply to uploaded Artifacts. (Comma separated)
+      - MALWAREBAZAAR_RECENT_ADDITIONS_LABELS_COLOR=#54483b # Color to use for labels
+    restart: always
+    deploy:
+      placement:
+        constraints: [node.labels.system_role == processor ]
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  connector-misp:
+    image: opencti/connector-misp:5.2.4
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - CONNECTOR_ID=${CONNECTOR_IMPORT_MISP_ID}
+      - CONNECTOR_TYPE=EXTERNAL_IMPORT
+      - CONNECTOR_NAME=MISP
+      - CONNECTOR_SCOPE=misp
+      - CONNECTOR_CONFIDENCE_LEVEL=15 # From 0 (Unknown) to 100 (Fully trusted)
+      - CONNECTOR_UPDATE_EXISTING_DATA=false
+      - CONNECTOR_LOG_LEVEL=info
+      - MISP_URL=${CONNECTOR_IMPORT_MISP_URL} # Required
+      - MISP_REFERENCE_URL= # Optional, will be used to create external reference to MISP event (default is "url")
+      - MISP_KEY=${CONNECTOR_IMPORT_MISP_API} # Required
+      - MISP_SSL_VERIFY=False # Required
+      - MISP_DATETIME_ATTRIBUTE=timestamp # Required, filter to be used in query for new MISP events
+      - MISP_CREATE_REPORTS=True # Required, create report for MISP event
+      - MISP_CREATE_INDICATORS=True # Required, create indicators from attributes
+      - MISP_CREATE_OBSERVABLES=True # Required, create observables from attributes
+      - MISP_CREATE_OBJECT_OBSERVABLES=True # Required, create text observables for MISP objects
+      - MISP_REPORT_CLASS=MISP Event # Optional, report_class if creating report for event
+      - MISP_IMPORT_FROM_DATE=2000-01-01 # Optional, import all event from this date
+      - MISP_IMPORT_TAGS=opencti:import,type:OSINT,workflow:state="complete" # Optional, list of tags used for import events
+      - MISP_IMPORT_TAGS_NOT= # Optional, list of tags to not include
+      - MISP_IMPORT_CREATOR_ORGS= # Optional, only import events created by this ORG (put the identifier here)
+      - MISP_IMPORT_OWNER_ORGS= # Optional, only import events owned by this ORG (put the identifier here)
+      - MISP_IMPORT_DISTRIBUTION_LEVELS=0,1,2,3 # Optional, only import events with the given distribution levels
+      - MISP_IMPORT_THREAT_LEVELS=1,2,3,4 # Optional only import events with the given threat levels
+      - MISP_IMPORT_ONLY_PUBLISHED=True
+      - MISP_IMPORT_WITH_ATTACHMENTS=False # Optional, try to import a PDF file from the attachment attribute
+      - MISP_IMPORT_TO_IDS_NO_SCORE=40 # Optional, use as a score for the indicator/observable if the attribute to_ids is no
+      - MISP_IMPORT_UNSUPPORTED_OBSERVABLES_AS_TEXT=False #  Optional, import unsupported observable as x_opencti_text
+      - MISP_INTERVAL=15 # Required, in minutes
+    restart: always
+    deploy:
+      placement:
+        constraints: [node.labels.system_role == processor ]
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  connector-mitre:
+    image: opencti/connector-mitre:5.2.4
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - CONNECTOR_ID=${CONNECTOR_IMPORT_MITRE_ID}
+      - CONNECTOR_TYPE=EXTERNAL_IMPORT
+      - CONNECTOR_NAME=MITRE ATT&CK
+      - CONNECTOR_SCOPE=marking-definition,identity,attack-pattern,course-of-action,intrusion-set,campaign,malware,tool,report,external-reference-as-report
+      - CONNECTOR_CONFIDENCE_LEVEL=15 # From 0 (Unknown) to 100 (Fully trusted)
+      - CONNECTOR_UPDATE_EXISTING_DATA=true
+      - CONNECTOR_RUN_AND_TERMINATE=false
+      - CONNECTOR_LOG_LEVEL=info
+      - MITRE_ENTERPRISE_FILE_URL=https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json
+      - MITRE_PRE_ATTACK_FILE_URL=https://raw.githubusercontent.com/mitre/cti/master/pre-attack/pre-attack.json
+      - MITRE_MOBILE_ATTACK_FILE_URL=https://raw.githubusercontent.com/mitre/cti/master/mobile-attack/mobile-attack.json
+      - MITRE_ICS_ATTACK_FILE_URL=https://raw.githubusercontent.com/mitre/cti/master/ics-attack/ics-attack.json
+      - MITRE_INTERVAL=1 # In days, must be strictly greater than 1
+    restart: always
+    deploy:
+      placement:
+        constraints: [node.labels.system_role == processor ]
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  connector-urlhaus-recent-payloads:
+    image: opencti/connector-urlhaus-recent-payloads:5.2.4
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - CONNECTOR_ID=${CONNECTOR_IMPORT_URLHAUS_PAYLOADS_ID}
+      - CONNECTOR_TYPE=EXTERNAL_IMPORT
+      - "CONNECTOR_NAME=URLHaus Recent Payloads"
+      - CONNECTOR_CONFIDENCE_LEVEL=50 # From 0 (Unknown) to 100 (Fully trusted)
+      - CONNECTOR_UPDATE_EXISTING_DATA=true
+      - CONNECTOR_LOG_LEVEL=info
+      - URLHAUS_RECENT_PAYLOADS_API_URL=https://urlhaus-api.abuse.ch/v1/
+      - URLHAUS_RECENT_PAYLOADS_COOLDOWN_SECONDS=300 # Time to wait in seconds between subsequent requests
+      - URLHAUS_RECENT_PAYLOADS_INCLUDE_FILETYPES=exe,dll,docm,docx,doc,xls,xlsx,xlsm,js,xll # (Optional) Only download files if any tag matches. (Comma separated)
+      - URLHAUS_RECENT_PAYLOADS_INCLUDE_SIGNATURES= # (Optional) Only download files uploaded by these reporters. (Comma separated)
+      - URLHAUS_RECENT_PAYLOADS_SKIP_UNKNOWN_FILETYPES=true # Skip files with an unknown file type
+      - URLHAUS_RECENT_PAYLOADS_SKIP_NULL_SIGNATURE=true # Skip files that didn't match known Yara signatures
+      - URLHAUS_RECENT_PAYLOADS_LABELS=urlhaus # (Optional) Labels to apply to uploaded Artifacts. (Comma separated)
+      - URLHAUS_RECENT_PAYLOADS_LABELS_COLOR=#54483b
+      - URLHAUS_RECENT_PAYLOADS_SIGNATURE_LABEL_COLOR=#0059f7 # Color for signature match label
+      - URLHAUS_RECENT_PAYLOADS_FILETYPE_LABEL_COLOR=#54483b # Color to use for filetype label
+    restart: always
+    deploy:
+      placement:
+        constraints: [node.labels.system_role == processor ]
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  connector-urlhaus:
+    image: opencti/connector-urlhaus:5.2.4
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - CONNECTOR_ID=${CONNECTOR_IMPORT_URLHAUS_PAYLOADS_ID}
+      - CONNECTOR_TYPE=EXTERNAL_IMPORT
+      - "CONNECTOR_NAME=Abuse.ch URLhaus"
+      - CONNECTOR_SCOPE=urlhaus
+      - CONNECTOR_CONFIDENCE_LEVEL=40 # From 0 (Unknown) to 100 (Fully trusted)
+      - CONNECTOR_UPDATE_EXISTING_DATA=true
+      - CONNECTOR_LOG_LEVEL=info
+      - URLHAUS_CSV_URL=https://urlhaus.abuse.ch/downloads/csv_recent/
+      - URLHAUS_IMPORT_OFFLINE=true
+      - URLHAUS_CREATE_INDICATORS=true
+      - URLHAUS_INTERVAL=1 # In days, must be strictly greater than 1
+    restart: always
+    deploy:
+      placement:
+        constraints: [node.labels.system_role == processor ]
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  connector-valhalla:
+    image: opencti/connector-valhalla:5.2.4
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - CONNECTOR_ID=${CONNECTOR_IMPORT_VALHALLA_ID}
+      - CONNECTOR_TYPE=EXTERNAL_IMPORT
+      - CONNECTOR_NAME=Valhalla
+      - CONNECTOR_SCOPE=valhalla
+      - CONNECTOR_CONFIDENCE_LEVEL=50 # From 0 (Unknown) to 100 (Fully trusted)
+      - CONNECTOR_UPDATE_EXISTING_DATA=false
+      - CONNECTOR_LOG_LEVEL=info
+      - VALHALLA_API_KEY=${CONNECTOR_IMPORT_VALHALLA_API_KEY} # Empty key only fetches public/demo information
+      - VALHALLA_INTERVAL_SEC=86400 # Run once every day
+    restart: always
+    deploy:
+      placement:
+        constraints: [node.labels.system_role == processor ]
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  connector-vxvault:
+    image: opencti/connector-vxvault:5.2.4
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - CONNECTOR_ID=${CONNECTOR_IMPORT_VXVAULT_ID}
+      - CONNECTOR_TYPE=EXTERNAL_IMPORT
+      - "CONNECTOR_NAME=VX Vault URL list"
+      - CONNECTOR_SCOPE=vxvault
+      - CONNECTOR_CONFIDENCE_LEVEL=40 # From 0 (Unknown) to 100 (Fully trusted)
+      - CONNECTOR_UPDATE_EXISTING_DATA=true
+      - CONNECTOR_LOG_LEVEL=info
+      - VXVAULT_URL=http://vxvault.net/URL_List.php
+      - VXVAULT_CREATE_INDICATORS=true
+      - VXVAULT_INTERVAL=1 # In days, must be strictly greater than 1
+    restart: always
+    deploy:
+      placement:
+        constraints: [node.labels.system_role == processor ]
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+volumes:
+  elasticsearch_01:
+  elasticsearch_02:
+  elasticsearch_03:
+  s3data:
+  redisdata:
+  amqpdata:
+  nodereddata:
